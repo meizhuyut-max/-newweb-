@@ -167,7 +167,15 @@ function demoLive(item, minuteBucket) {
   wait = Math.max(0, Math.min(45, wait));
   const elapsed = minuteBucket % 400;
   const sales = Math.round((30 + base * 90) * (1 + elapsed / 120));
-  return { wait, sales, updatedAt: nowLabel(), reported: true };
+  return {
+    wait,
+    waitLabel: null,
+    waitReported: true,
+    sales,
+    salesReported: true,
+    updatedAt: nowLabel(),
+    updatedMin: null,
+  };
 }
 
 function demoReviews(item) {
@@ -263,37 +271,13 @@ async function loadLive() {
   const live = {};
   const reviews = {};
 
+  // 待ち人数（トラメガ隊のフォーム）と売上（模擬店のフォーム）は別シートになる想定。
+  // 同じ形なので同じ関数で読み込み、live に上書きしていく。
   if (CFG.congestionCsvUrl) {
-    try {
-      const rows = await fetchCsv(CFG.congestionCsvUrl);
-      const header = rows.shift();
-      const cId = pickColumn(header, ['模擬店ID', '企画ID', 'ID', 'id']);
-      const cWait = pickColumn(header, ['待ち人数', '並び人数', 'wait']);
-      const cSales = pickColumn(header, ['売上個数', '販売個数', 'sales']);
-      const cTime = pickColumn(header, ['タイムスタンプ', '更新時刻', 'timestamp']);
-      if (cId < 0) throw new Error('ID列が見つかりません');
-      // 同じ店の行が複数あれば、後の行（＝新しい報告）で上書きしていく。
-      // Googleフォームの回答は下に追記されるので、最後の行が最新になる。
-      rows.forEach((r) => {
-        const id = normalizeId(r[cId]);
-        if (!id) return;
-        const prev = live[id] || {};
-        const wait = cWait >= 0 ? parseWait(r[cWait]) : null;
-        const sales = cSales >= 0 ? parseNum(r[cSales]) : null;
-        const stamp = cTime >= 0 ? parseStamp(r[cTime]) : null;
-        live[id] = {
-          // 空欄の項目は前の報告の値を残す（待ち人数だけ報告する運用があるため）
-          wait: wait === null ? prev.wait || 0 : wait.value,
-          waitLabel: wait === null ? prev.waitLabel || null : wait.label,
-          sales: sales === null ? prev.sales || 0 : sales,
-          updatedAt: stamp ? stamp.label : nowLabel(),
-          updatedMin: stamp ? stamp.min : null,
-          reported: true,
-        };
-      });
-    } catch (e) {
-      errors.push('混雑データ: ' + e.message);
-    }
+    await mergeCsvInto(live, CFG.congestionCsvUrl, '混雑データ', errors);
+  }
+  if (CFG.salesCsvUrl) {
+    await mergeCsvInto(live, CFG.salesCsvUrl, '売上データ', errors);
   }
 
   if (CFG.reviewCsvUrl) {
@@ -333,6 +317,63 @@ async function loadLive() {
 
   applyMyReviews();
   Store.emit();
+}
+
+/**
+ * Googleフォームの回答シート（CSV）を読んで live に反映する。
+ *
+ * 待ち人数のシートにも売上のシートにも使える。列が無ければその項目は触らないので、
+ * 「待ち人数だけのシート」と「売上だけのシート」を重ねて読んでも壊れない。
+ * 同じ店の行が複数あれば、後の行（＝新しい報告）で上書きする。
+ * Googleフォームの回答は下に追記されるので、最後の行が最新になる。
+ */
+async function mergeCsvInto(live, url, label, errors) {
+  try {
+    const rows = await fetchCsv(url);
+    const header = rows.shift();
+    const cId = pickColumn(header, ['模擬店ID', '企画ID', 'ID', 'id']);
+    const cWait = pickColumn(header, ['待ち人数', '並び人数', 'wait']);
+    const cSales = pickColumn(header, ['売上個数', '販売個数', 'sales']);
+    const cTime = pickColumn(header, ['タイムスタンプ', '更新時刻', 'timestamp']);
+    if (cId < 0) throw new Error('ID列が見つかりません');
+    if (cWait < 0 && cSales < 0) throw new Error('待ち人数の列も売上個数の列も見つかりません');
+
+    const today = todayIso();
+    rows.forEach((r) => {
+      const id = normalizeId(r[cId]);
+      if (!id) return;
+      const stamp = cTime >= 0 ? parseStamp(r[cTime]) : null;
+
+      // 1日目の報告を2日目の朝に表示してしまわないよう、日付の違う行は捨てる。
+      // （日付が読めない行や、開催日以外に動かしている試作段階では捨てない）
+      if (CFG.onlyTodaysRows && stamp && stamp.date && stamp.date !== today) return;
+
+      const prev = live[id] || {};
+      const wait = cWait >= 0 ? parseWait(r[cWait]) : null;
+      const sales = cSales >= 0 ? parseNum(r[cSales]) : null;
+
+      live[id] = {
+        ...prev,
+        // 空欄の項目は前の報告の値を残す（片方だけ報告する運用があるため）
+        wait: wait === null ? prev.wait || 0 : wait.value,
+        waitLabel: wait === null ? prev.waitLabel || null : wait.label,
+        waitReported: wait === null ? prev.waitReported === true : true,
+        sales: sales === null ? prev.sales || 0 : sales,
+        salesReported: sales === null ? prev.salesReported === true : true,
+      };
+      // 待ち人数が更新された行のときだけ「いつの情報か」を更新する。
+      // 売上だけの報告で待ち人数の鮮度が上がったように見せないため。
+      if (wait !== null) {
+        live[id].updatedAt = stamp ? stamp.label : nowLabel();
+        live[id].updatedMin = stamp ? stamp.min : null;
+      } else if (!prev.updatedAt) {
+        live[id].updatedAt = '—';
+        live[id].updatedMin = null;
+      }
+    });
+  } catch (e) {
+    errors.push(label + ': ' + e.message);
+  }
 }
 
 /** 「12」「12人」「 12 」などを数値に。空欄は null（＝前の値を残す合図）を返す */
@@ -389,13 +430,28 @@ function normalizeId(raw) {
   return hit || '';
 }
 
-/** Googleフォームのタイムスタンプ（例 2026/06/13 14:35:22）を読む */
+/**
+ * Googleフォームのタイムスタンプ（例 2026/06/13 14:35:22）を読む。
+ * 日付も返すので、前日の報告を今日の表示に使ってしまう事故を防げる。
+ */
 function parseStamp(raw) {
-  const m = String(raw ?? '').match(/(\d{1,2}):(\d{2})/);
-  if (!m) return null;
-  const h = parseInt(m[1], 10);
-  const min = parseInt(m[2], 10);
-  return { label: `${String(h).padStart(2, '0')}:${m[2]}`, min: h * 60 + min };
+  const s = String(raw ?? '');
+  const t = s.match(/(\d{1,2}):(\d{2})/);
+  if (!t) return null;
+  const h = parseInt(t[1], 10);
+  const min = parseInt(t[2], 10);
+
+  // 2026/06/13 でも 2026-06-13 でも拾う
+  const d = s.match(/(\d{4})[/\-](\d{1,2})[/\-](\d{1,2})/);
+  const date = d ? `${d[1]}-${d[2].padStart(2, '0')}-${d[3].padStart(2, '0')}` : null;
+
+  return { label: `${String(h).padStart(2, '0')}:${t[2]}`, min: h * 60 + min, date };
+}
+
+/** 今日の日付（YYYY-MM-DD） */
+function todayIso() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 /**
@@ -440,29 +496,57 @@ function ratingOf(id) {
 }
 
 /**
- * 待ち人数などの現在値。
- * まだ一度も報告が来ていない店は reported:false になる。
- * これを 0人 と同じ扱いにすると「空いてる」と誤解されるので、画面側で必ず分ける。
+ * 待ち人数・売上の現在値。
+ *
+ * waitReported / salesReported は「その項目の報告が来ているか」。
+ * 待ち人数と売上は報告する人が違う（トラメガ隊／模擬店の1年生）ので、
+ * 片方だけ届いている状態が普通に起きる。だからフラグも別々に持つ。
+ * 未報告を 0 と同じ扱いにすると「空いてる」「売れていない」と誤解されるので、
+ * 画面側では必ず分けて表示する。
  */
 function liveOf(id) {
-  return Store.live[id] || { wait: 0, sales: 0, updatedAt: '—', reported: false };
+  return (
+    Store.live[id] || {
+      wait: 0,
+      waitLabel: null,
+      waitReported: false,
+      sales: 0,
+      salesReported: false,
+      updatedAt: '—',
+      updatedMin: null,
+    }
+  );
 }
 
 /** 並べ替え用の待ち人数。未報告は末尾に送りたいので特別扱いする */
 function waitForSort(id, order) {
   const l = liveOf(id);
-  if (l.reported === false) return order === 'busy' ? -1 : Infinity;
+  if (!l.waitReported) return order === 'busy' ? -1 : Infinity;
   return l.wait;
 }
 
-/** 売上個数の学内順位（模擬店のみで競う） */
+/**
+ * 売上個数の学内順位（模擬店のみで競う）。
+ *
+ * 売上を報告していない店を 0個 として順位に混ぜると、
+ * ただ報告が来ていないだけの店に「学内14位」と付いてしまうので、
+ * **報告が来ている店だけ**で順位を作る。報告が無ければ null を返す。
+ */
 function salesRank(id) {
-  const shops = Store.items.filter((i) => i.type === 'shop');
-  const sorted = shops
-    .map((i) => ({ id: i.id, sales: liveOf(i.id).sales }))
-    .sort((a, b) => b.sales - a.sales);
+  const reported = Store.items
+    .filter((i) => i.type === 'shop')
+    .map((i) => ({ id: i.id, sales: liveOf(i.id).sales, has: liveOf(i.id).salesReported }))
+    .filter((s) => s.has && s.sales > 0);
+
+  const sorted = reported.sort((a, b) => b.sales - a.sales);
   const idx = sorted.findIndex((s) => s.id === id);
-  return idx < 0 ? null : { rank: idx + 1, total: sorted.length };
+  if (idx < 0) return null;
+  return {
+    rank: idx + 1,
+    total: sorted.length,
+    // 上位だけを見せたいとき用（下位まで公開するとクラス間の角が立つため）
+    isTop: idx + 1 <= (CFG.salesRankTopN || 3),
+  };
 }
 
 function findCell(cellId) {

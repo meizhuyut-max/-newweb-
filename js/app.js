@@ -50,7 +50,7 @@ function starsHtml(avg) {
 function waitHtml(id) {
   const l = liveOf(id);
   // まだ報告が来ていない店を「0人・空いてる」と出すと嘘になるので、はっきり分ける
-  if (l.reported === false) {
+  if (!l.waitReported) {
     return `<div class="wait" style="color:var(--faint)">
         <div><span class="wait__num">—</span></div>
         <div class="wait__label" style="background:rgba(255,255,255,.07)">未報告</div>
@@ -107,7 +107,7 @@ function viewHome() {
   const next = upcoming(day, t, 1)[0];
   const shops = Store.items.filter((i) => i.type === 'shop');
   // 報告が届いている店だけを「空いている／並んでいる」に出す
-  const reported = shops.filter((i) => liveOf(i.id).reported !== false);
+  const reported = shops.filter((i) => liveOf(i.id).waitReported);
   const freeNow = reported
     .slice()
     .sort((a, b) => liveOf(a.id).wait - liveOf(b.id).wait)
@@ -231,7 +231,7 @@ function viewLive() {
         .map((i) => {
           const l = liveOf(i.id);
           let note;
-          if (l.reported === false) note = 'まだ報告がありません';
+          if (!l.waitReported) note = 'まだ報告がありません';
           else if (isStale(i.id)) note = `⚠ ${minutesSinceUpdate(i.id)}分前の情報`;
           else note = l.wait > 0 ? `およそ${waitMinutes(l.wait)}分待ち` : '待ちなし';
           return itemRow(i, { sub: `${placeLabel(i)}　${note}` });
@@ -320,7 +320,7 @@ function viewItem(id) {
         <div class="stat">
           <div class="stat__label">いまの待ち人数</div>
           ${
-            live.reported === false
+            !live.waitReported
               ? `<div class="stat__value" style="color:var(--faint)">—</div>
                  <div class="stat__note">まだ報告が届いていません</div>`
               : `<div class="stat__value" style="color:var(--${lv.key})">${
@@ -335,14 +335,20 @@ function viewItem(id) {
         </div>
         <div class="stat">
           <div class="stat__label">${item.type === 'shop' ? '現在の売上個数' : '平均レビュー'}</div>
-          <div class="stat__value">${item.type === 'shop' ? `${live.sales}個` : r.avg.toFixed(1)}</div>
-          <div class="stat__note">${
-            item.type === 'shop'
-              ? rank
-                ? `<span class="rank">学内${rank.rank}位！</span>（全${rank.total}店）`
-                : ''
-              : `${r.count}件のレビュー`
-          }</div>
+          ${
+            item.type !== 'shop'
+              ? `<div class="stat__value">${r.avg.toFixed(1)}</div>
+                 <div class="stat__note">${r.count}件のレビュー</div>`
+              : !live.salesReported || !live.sales
+              ? `<div class="stat__value" style="color:var(--faint)">—</div>
+                 <div class="stat__note">まだ報告が届いていません</div>`
+              : `<div class="stat__value">${live.sales}個</div>
+                 <div class="stat__note">${
+                   rank && rank.isTop
+                     ? `<span class="rank">学内${rank.rank}位！</span>（報告のあった${rank.total}店中）`
+                     : '売れた数を集計中'
+                 }</div>`
+          }
         </div>
       </div>
 
@@ -743,7 +749,7 @@ function viewStaff() {
           const url = staffFormLink(i.id);
           // 「報告が無い」と「報告はあるが時刻が分からない（デモ等）」は別物
           let status;
-          if (l.reported === false) {
+          if (!l.waitReported) {
             status = '<span style="color:var(--faint);font-size:11px">未報告</span>';
           } else if (since === null) {
             status = `<span style="color:var(--faint);font-size:11px">${
@@ -762,7 +768,7 @@ function viewStaff() {
               </span>
               <span class="row__right">
                 <div style="font-size:15px;font-weight:800">${
-                  l.reported === false ? '—' : l.waitLabel ? esc(l.waitLabel) : `${l.wait}人`
+                  !l.waitReported ? '—' : l.waitLabel ? esc(l.waitLabel) : `${l.wait}人`
                 }</div>
                 ${status}
               </span>
