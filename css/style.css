@@ -409,6 +409,12 @@ a {
   opacity: 0.85;
   margin-left: 1px;
 }
+/* 「4〜9人」のように幅で報告されたとき。桁数が多いので少し小さく */
+.wait__range {
+  font-size: 13.5px;
+  font-weight: 800;
+  white-space: nowrap;
+}
 .wait__label {
   font-size: 10.5px;
   font-weight: 700;

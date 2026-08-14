@@ -278,12 +278,13 @@ async function loadLive() {
         const id = normalizeId(r[cId]);
         if (!id) return;
         const prev = live[id] || {};
-        const wait = cWait >= 0 ? parseNum(r[cWait]) : null;
+        const wait = cWait >= 0 ? parseWait(r[cWait]) : null;
         const sales = cSales >= 0 ? parseNum(r[cSales]) : null;
         const stamp = cTime >= 0 ? parseStamp(r[cTime]) : null;
         live[id] = {
           // 空欄の項目は前の報告の値を残す（待ち人数だけ報告する運用があるため）
-          wait: wait === null ? prev.wait || 0 : wait,
+          wait: wait === null ? prev.wait || 0 : wait.value,
+          waitLabel: wait === null ? prev.waitLabel || null : wait.label,
           sales: sales === null ? prev.sales || 0 : sales,
           updatedAt: stamp ? stamp.label : nowLabel(),
           updatedMin: stamp ? stamp.min : null,
@@ -340,6 +341,37 @@ function parseNum(raw) {
   if (!s) return null;
   const m = s.match(/-?\d+/);
   return m ? parseInt(m[0], 10) : null;
+}
+
+/**
+ * 待ち人数の欄を読む。フォームの答え方2通りに両対応する。
+ *
+ *   記述式（数値）   「12」      → 12人ちょうど。そのまま表示
+ *   ラジオ（段階）   「4〜9人」   → 計算には中央値の7を使い、表示は「4〜9人」のまま
+ *                   「20人以上」 → 計算には25を使い、表示は「20人以上」のまま
+ *
+ * 段階で答えてもらったのに「7人」と言い切って表示すると嘘になるので、
+ * 数値（並べ替え・混雑レベル用）と表示文字列を分けて持つ。
+ */
+function parseWait(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return null;
+  const nums = s.match(/\d+/g);
+  if (!nums) return null;
+
+  const a = parseInt(nums[0], 10);
+
+  // 「4〜9人」のように2つ数字がある → 中央値
+  if (nums.length >= 2) {
+    const b = parseInt(nums[1], 10);
+    return { value: Math.round((a + b) / 2), label: s };
+  }
+  // 「20人以上」→ 下限より少し上を代表値にする
+  if (/以上|超|\+/.test(s)) {
+    return { value: a + Math.max(3, Math.round(a * 0.25)), label: s };
+  }
+  // ただの数値 → そのまま。表示用ラベルは不要
+  return { value: a, label: null };
 }
 
 /**

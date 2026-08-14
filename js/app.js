@@ -57,8 +57,12 @@ function waitHtml(id) {
       </div>`;
   }
   const lv = levelOf(l.wait);
+  // 段階で報告された場合は「4〜9人」のような幅のまま見せる
+  const num = l.waitLabel
+    ? `<span class="wait__range">${esc(l.waitLabel)}</span>`
+    : `<span class="wait__num">${l.wait}</span><span class="wait__unit">人</span>`;
   return `<div class="wait lv-${lv.key}">
-      <div><span class="wait__num">${l.wait}</span><span class="wait__unit">人</span></div>
+      <div>${num}</div>
       <div class="wait__label">${lv.short}</div>
     </div>`;
 }
@@ -319,7 +323,9 @@ function viewItem(id) {
             live.reported === false
               ? `<div class="stat__value" style="color:var(--faint)">—</div>
                  <div class="stat__note">まだ報告が届いていません</div>`
-              : `<div class="stat__value" style="color:var(--${lv.key})">${live.wait}人</div>
+              : `<div class="stat__value" style="color:var(--${lv.key})">${
+                   live.waitLabel ? esc(live.waitLabel) : `${live.wait}人`
+                 }</div>
                  <div class="stat__note">${lv.label}・およそ${waitMinutes(live.wait)}分<br>${
                    isStale(id)
                      ? `<span style="color:var(--peak)">⚠ ${minutesSinceUpdate(id)}分前の情報です</span>`
@@ -755,7 +761,9 @@ function viewStaff() {
                 <span class="row__sub">${esc(i.id)}・${esc(placeLabel(i))}</span>
               </span>
               <span class="row__right">
-                <div style="font-size:15px;font-weight:800">${l.wait}人</div>
+                <div style="font-size:15px;font-weight:800">${
+                  l.reported === false ? '—' : l.waitLabel ? esc(l.waitLabel) : `${l.wait}人`
+                }</div>
                 ${status}
               </span>
             </a>`;
