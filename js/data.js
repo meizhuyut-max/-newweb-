@@ -326,6 +326,30 @@ async function loadLive() {
 }
 
 /**
+ * 「どちらの報告が新しいか」を比べるための値を作る。
+ *
+ * Googleフォームは回答を下に追記するので、普通は行の順番＝時刻の順番になる。
+ * ただしシートをIDで並べ替えたり、別タブに並べ直したりすると崩れる。
+ * そこでタイムスタンプが読めるならそれで比べ、読めないときだけ行の順番で比べる。
+ */
+function rowOrder(stamp, rowIndex) {
+  if (!stamp) return { time: null, index: rowIndex };
+  // 日付が読めれば日をまたいでも正しく比べられる
+  const dayNo = stamp.date ? Date.parse(stamp.date + 'T00:00:00') / 60000 : 0;
+  return { time: dayNo + stamp.min, index: rowIndex };
+}
+
+/** a が b より新しい（または b がまだ無い）か */
+function isNewer(a, b) {
+  if (!b) return true;
+  if (a.time !== null && b.time !== null) {
+    if (a.time !== b.time) return a.time > b.time;
+    return a.index >= b.index; // 同時刻なら後の行
+  }
+  return a.index >= b.index; // 時刻が読めない側があるなら行の順番で
+}
+
+/**
  * Googleフォームの回答シート（CSV）を読んで live に反映する。
  *
  * 待ち人数のシートにも売上のシートにも使える。列が無ければその項目は触らないので、
@@ -345,7 +369,7 @@ async function mergeCsvInto(live, url, label, errors) {
     if (cWait < 0 && cSales < 0) throw new Error('待ち人数の列も売上個数の列も見つかりません');
 
     const today = todayIso();
-    rows.forEach((r) => {
+    rows.forEach((r, rowIndex) => {
       const id = normalizeId(r[cId]);
       if (!id) return;
       const stamp = cTime >= 0 ? parseStamp(r[cTime]) : null;
@@ -357,25 +381,39 @@ async function mergeCsvInto(live, url, label, errors) {
       const prev = live[id] || {};
       const wait = cWait >= 0 ? parseWait(r[cWait]) : null;
       const sales = cSales >= 0 ? parseNum(r[cSales]) : null;
+      const order = rowOrder(stamp, rowIndex);
+      const next = { ...prev };
 
-      live[id] = {
-        ...prev,
-        // 空欄の項目は前の報告の値を残す（片方だけ報告する運用があるため）
-        wait: wait === null ? prev.wait || 0 : wait.value,
-        waitLabel: wait === null ? prev.waitLabel || null : wait.label,
-        waitReported: wait === null ? prev.waitReported === true : true,
-        sales: sales === null ? prev.sales || 0 : sales,
-        salesReported: sales === null ? prev.salesReported === true : true,
-      };
-      // 待ち人数が更新された行のときだけ「いつの情報か」を更新する。
-      // 売上だけの報告で待ち人数の鮮度が上がったように見せないため。
-      if (wait !== null) {
-        live[id].updatedAt = stamp ? stamp.label : nowLabel();
-        live[id].updatedMin = stamp ? stamp.min : null;
-      } else if (!prev.updatedAt) {
-        live[id].updatedAt = '—';
-        live[id].updatedMin = null;
+      // 待ち人数と売上は、それぞれ「その項目を報告している行の中で最新のもの」を採る。
+      // 項目ごとに比べるので、待ち人数だけの報告が売上を消すことはない。
+      if (wait !== null && isNewer(order, prev._waitOrder)) {
+        next.wait = wait.value;
+        next.waitLabel = wait.label;
+        next.waitReported = true;
+        next._waitOrder = order;
+        // 「いつの情報か」は待ち人数が更新された行の時刻。
+        // 売上だけの報告で待ち人数の鮮度が上がったように見せないため。
+        next.updatedAt = stamp ? stamp.label : nowLabel();
+        next.updatedMin = stamp ? stamp.min : null;
       }
+      if (sales !== null && isNewer(order, prev._salesOrder)) {
+        next.sales = sales;
+        next.salesReported = true;
+        next._salesOrder = order;
+      }
+
+      // 空欄しか無い行でも、その店の存在は記録しておく（値は既定のまま）
+      next.wait = next.wait || 0;
+      next.waitLabel = next.waitLabel || null;
+      next.waitReported = next.waitReported === true;
+      next.sales = next.sales || 0;
+      next.salesReported = next.salesReported === true;
+      if (!next.updatedAt) {
+        next.updatedAt = '—';
+        next.updatedMin = null;
+      }
+
+      live[id] = next;
     });
   } catch (e) {
     errors.push(label + ': ' + e.message);
