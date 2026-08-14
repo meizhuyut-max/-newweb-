@@ -16,7 +16,8 @@ window.KODAIRA_CONFIG = {
      空文字のままだとデモデータで動く（会議で見せる分にはこれで十分）。   */
 
   // 待ち人数（トラメガ隊が巡回して入力）
-  congestionCsvUrl: '',
+  congestionCsvUrl:
+    'https://docs.google.com/spreadsheets/d/e/2PACX-1vR99BXgEIUsc6yIIUay-_o4gXAqNALh5DYFy17dKvNg7uUBhHUMQgBDDe-AJDhvjgCIAopX0jziV8AF/pub?output=csv',
 
   // 売上個数（各模擬店の1年生が入力）。待ち人数とは報告する人が違うので
   // フォームを分ける前提。1枚のフォームに両方入れている場合は空のままでよい。
@@ -39,6 +40,8 @@ window.KODAIRA_CONFIG = {
      さらに staffFormFields.itemId を入れると、アプリの隊員モード
      （#/staff）から店を選ぶだけで模擬店IDが入力済みのフォームが開く。
      entry.xxxxx はフォームの「事前入力したURLを取得」で調べられる。   */
+  // ここはスプレッドシートではなく「フォームそのもの」のURL。
+  // フォーム編集画面の右上「送信」→ リンクのタブ に出る .../viewform を貼る。
   staffFormUrl: '', // 例: https://docs.google.com/forms/d/e/xxxx/viewform
   staffFormFields: {
     itemId: '', // 例: 'entry.111111111'

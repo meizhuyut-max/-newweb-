@@ -306,14 +306,20 @@ async function loadLive() {
   Store.syncErrors = errors;
   Store.lastSync = new Date();
 
-  // シートにまだ行がない店はデモ値で埋めておく（試作段階で穴が空くのを防ぐ）
-  if (CFG.demoMode !== 'off') {
-    const bucket = Math.floor(Date.now() / 60000);
-    Store.items.forEach((it) => {
-      if (!Store.live[it.id]) Store.live[it.id] = demoLive(it, bucket);
-      if (!Store.reviews[it.id]) Store.reviews[it.id] = demoReviews(it);
-    });
-  }
+  /* 足りないぶんをデモ値で埋めるかどうか。
+     原則は「その項目の取得元を設定したなら、その項目は絶対に捏造しない」。
+     混雑シートを繋いだのに未巡回の店にデモの待ち人数を入れてしまうと、
+     わざわざ作った「未報告」表示が意味を失い、来場者に嘘をつくことになる。
+     一方、取得元をまだ設定していない項目は、試作を見せるために埋めてよい。 */
+  const bucket = Math.floor(Date.now() / 60000);
+  const hasLiveSource = !!(CFG.congestionCsvUrl || CFG.salesCsvUrl);
+  const fillLive = CFG.demoMode === 'on' || !hasLiveSource;
+  const fillReviews = CFG.demoMode === 'on' || !CFG.reviewCsvUrl;
+
+  Store.items.forEach((it) => {
+    if (fillLive && !Store.live[it.id]) Store.live[it.id] = demoLive(it, bucket);
+    if (fillReviews && !Store.reviews[it.id]) Store.reviews[it.id] = demoReviews(it);
+  });
 
   applyMyReviews();
   Store.emit();
