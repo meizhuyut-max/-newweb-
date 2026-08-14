@@ -167,7 +167,7 @@ function demoLive(item, minuteBucket) {
   wait = Math.max(0, Math.min(45, wait));
   const elapsed = minuteBucket % 400;
   const sales = Math.round((30 + base * 90) * (1 + elapsed / 120));
-  return { wait, sales, updatedAt: nowLabel() };
+  return { wait, sales, updatedAt: nowLabel(), reported: true };
 }
 
 function demoReviews(item) {
@@ -272,14 +272,22 @@ async function loadLive() {
       const cSales = pickColumn(header, ['売上個数', '販売個数', 'sales']);
       const cTime = pickColumn(header, ['タイムスタンプ', '更新時刻', 'timestamp']);
       if (cId < 0) throw new Error('ID列が見つかりません');
-      // 同じ店の行が複数あれば、最後の行（＝最新の報告）を採用する
+      // 同じ店の行が複数あれば、後の行（＝新しい報告）で上書きしていく。
+      // Googleフォームの回答は下に追記されるので、最後の行が最新になる。
       rows.forEach((r) => {
-        const id = (r[cId] || '').trim();
+        const id = normalizeId(r[cId]);
         if (!id) return;
+        const prev = live[id] || {};
+        const wait = cWait >= 0 ? parseNum(r[cWait]) : null;
+        const sales = cSales >= 0 ? parseNum(r[cSales]) : null;
+        const stamp = cTime >= 0 ? parseStamp(r[cTime]) : null;
         live[id] = {
-          wait: cWait >= 0 ? parseInt(r[cWait], 10) || 0 : 0,
-          sales: cSales >= 0 ? parseInt(r[cSales], 10) || 0 : 0,
-          updatedAt: cTime >= 0 ? formatStamp(r[cTime]) : nowLabel(),
+          // 空欄の項目は前の報告の値を残す（待ち人数だけ報告する運用があるため）
+          wait: wait === null ? prev.wait || 0 : wait,
+          sales: sales === null ? prev.sales || 0 : sales,
+          updatedAt: stamp ? stamp.label : nowLabel(),
+          updatedMin: stamp ? stamp.min : null,
+          reported: true,
         };
       });
     } catch (e) {
@@ -326,9 +334,56 @@ async function loadLive() {
   Store.emit();
 }
 
-function formatStamp(raw) {
-  const m = String(raw).match(/(\d{1,2}):(\d{2})/);
-  return m ? `${m[1].padStart(2, '0')}:${m[2]}` : nowLabel();
+/** 「12」「12人」「 12 」などを数値に。空欄は null（＝前の値を残す合図）を返す */
+function parseNum(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return null;
+  const m = s.match(/-?\d+/);
+  return m ? parseInt(m[0], 10) : null;
+}
+
+/**
+ * フォームのID欄を、こちらの知っているIDに正規化する。
+ * プルダウンの選択肢を「s20 ｜ 20クラスの焼き小籠包」のようにしても拾えるよう、
+ * 行の中から既知のIDを探す。
+ */
+function normalizeId(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return '';
+  if (Store.byId[s]) return s;
+  const token = s.split(/[\s|｜,、:：]+/).find((t) => Store.byId[t]);
+  if (token) return token;
+  const hit = Object.keys(Store.byId).find((id) => s.includes(id));
+  return hit || '';
+}
+
+/** Googleフォームのタイムスタンプ（例 2026/06/13 14:35:22）を読む */
+function parseStamp(raw) {
+  const m = String(raw ?? '').match(/(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  const h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  return { label: `${String(h).padStart(2, '0')}:${m[2]}`, min: h * 60 + min };
+}
+
+/**
+ * その報告が何分前のものか。実データのときだけ意味を持つ。
+ * タイムスタンプが無い／デモのときは null。
+ */
+function minutesSinceUpdate(id) {
+  if (Store.source !== 'sheet') return null;
+  const l = Store.live[id];
+  if (!l || l.updatedMin == null) return null;
+  const d = new Date();
+  const nowReal = d.getHours() * 60 + d.getMinutes();
+  const diff = nowReal - l.updatedMin;
+  return diff < 0 ? 0 : diff;
+}
+
+/** 報告が古すぎて当てにならない状態か */
+function isStale(id) {
+  const m = minutesSinceUpdate(id);
+  return m !== null && m >= (CFG.staleAfterMinutes || 30);
 }
 
 /** 自分がこの端末で付けた★を平均に反映させる（投稿直後に数字が動く体験のため） */
@@ -352,8 +407,20 @@ function ratingOf(id) {
   return { avg: r.sum / r.count, count: r.count };
 }
 
+/**
+ * 待ち人数などの現在値。
+ * まだ一度も報告が来ていない店は reported:false になる。
+ * これを 0人 と同じ扱いにすると「空いてる」と誤解されるので、画面側で必ず分ける。
+ */
 function liveOf(id) {
-  return Store.live[id] || { wait: 0, sales: 0, updatedAt: '—' };
+  return Store.live[id] || { wait: 0, sales: 0, updatedAt: '—', reported: false };
+}
+
+/** 並べ替え用の待ち人数。未報告は末尾に送りたいので特別扱いする */
+function waitForSort(id, order) {
+  const l = liveOf(id);
+  if (l.reported === false) return order === 'busy' ? -1 : Infinity;
+  return l.wait;
 }
 
 /** 売上個数の学内順位（模擬店のみで競う） */

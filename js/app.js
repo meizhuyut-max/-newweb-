@@ -48,10 +48,17 @@ function starsHtml(avg) {
 }
 
 function waitHtml(id) {
-  const { wait } = liveOf(id);
-  const lv = levelOf(wait);
+  const l = liveOf(id);
+  // まだ報告が来ていない店を「0人・空いてる」と出すと嘘になるので、はっきり分ける
+  if (l.reported === false) {
+    return `<div class="wait" style="color:var(--faint)">
+        <div><span class="wait__num">—</span></div>
+        <div class="wait__label" style="background:rgba(255,255,255,.07)">未報告</div>
+      </div>`;
+  }
+  const lv = levelOf(l.wait);
   return `<div class="wait lv-${lv.key}">
-      <div><span class="wait__num">${wait}</span><span class="wait__unit">人</span></div>
+      <div><span class="wait__num">${l.wait}</span><span class="wait__unit">人</span></div>
       <div class="wait__label">${lv.short}</div>
     </div>`;
 }
@@ -95,11 +102,13 @@ function viewHome() {
   const t = nowMinutes();
   const next = upcoming(day, t, 1)[0];
   const shops = Store.items.filter((i) => i.type === 'shop');
-  const freeNow = shops
+  // 報告が届いている店だけを「空いている／並んでいる」に出す
+  const reported = shops.filter((i) => liveOf(i.id).reported !== false);
+  const freeNow = reported
     .slice()
     .sort((a, b) => liveOf(a.id).wait - liveOf(b.id).wait)
     .slice(0, 3);
-  const hotNow = shops
+  const hotNow = reported
     .slice()
     .sort((a, b) => liveOf(b.id).wait - liveOf(a.id).wait)
     .slice(0, 3);
@@ -173,8 +182,11 @@ function viewLive() {
     if (UI.liveFilter === 'event') return i.type === 'event';
     return i.category === UI.liveFilter;
   });
+  // 未報告の店はどちらの並び順でも末尾に送る
   list.sort((a, b) =>
-    UI.liveSort === 'busy' ? liveOf(b.id).wait - liveOf(a.id).wait : liveOf(a.id).wait - liveOf(b.id).wait
+    UI.liveSort === 'busy'
+      ? waitForSort(b.id, 'busy') - waitForSort(a.id, 'busy')
+      : waitForSort(a.id, 'free') - waitForSort(b.id, 'free')
   );
 
   // 会期中の時計をシミュレートしているときは、詳細画面の時刻と食い違わないよう揃える
@@ -213,9 +225,12 @@ function viewLive() {
 
       ${list
         .map((i) => {
-          const w = liveOf(i.id).wait;
-          const sub = `${placeLabel(i)}　${w > 0 ? `およそ${waitMinutes(w)}分待ち` : '待ちなし'}`;
-          return itemRow(i, { sub });
+          const l = liveOf(i.id);
+          let note;
+          if (l.reported === false) note = 'まだ報告がありません';
+          else if (isStale(i.id)) note = `⚠ ${minutesSinceUpdate(i.id)}分前の情報`;
+          else note = l.wait > 0 ? `およそ${waitMinutes(l.wait)}分待ち` : '待ちなし';
+          return itemRow(i, { sub: `${placeLabel(i)}　${note}` });
         })
         .join('')}
 
@@ -300,8 +315,17 @@ function viewItem(id) {
       <div class="stat-grid">
         <div class="stat">
           <div class="stat__label">いまの待ち人数</div>
-          <div class="stat__value" style="color:var(--${lv.key})">${live.wait}人</div>
-          <div class="stat__note">${lv.label}・およそ${waitMinutes(live.wait)}分（${live.updatedAt} 時点）</div>
+          ${
+            live.reported === false
+              ? `<div class="stat__value" style="color:var(--faint)">—</div>
+                 <div class="stat__note">まだ報告が届いていません</div>`
+              : `<div class="stat__value" style="color:var(--${lv.key})">${live.wait}人</div>
+                 <div class="stat__note">${lv.label}・およそ${waitMinutes(live.wait)}分<br>${
+                   isStale(id)
+                     ? `<span style="color:var(--peak)">⚠ ${minutesSinceUpdate(id)}分前の情報です</span>`
+                     : `${live.updatedAt} 時点`
+                 }</div>`
+          }
         </div>
         <div class="stat">
           <div class="stat__label">${item.type === 'shop' ? '現在の売上個数' : '平均レビュー'}</div>
@@ -664,6 +688,87 @@ function floorSvg(floor, targetCell) {
     </svg>`;
 }
 
+/* ---------- 隊員モード（トラメガ隊の報告用） ---------- */
+
+/** 模擬店IDを入力済みにしたGoogleフォームのURLを組み立てる */
+function staffFormLink(itemId) {
+  const cfg = window.KODAIRA_CONFIG;
+  if (!cfg.staffFormUrl) return '';
+  const f = cfg.staffFormFields || {};
+  if (!f.itemId) return cfg.staffFormUrl; // 事前入力の設定が無ければ素のフォームを開く
+  const u = new URL(cfg.staffFormUrl);
+  u.searchParams.set('usp', 'pp_url');
+  u.searchParams.set(f.itemId, itemId);
+  return u.toString();
+}
+
+function viewStaff() {
+  const cfg = window.KODAIRA_CONFIG;
+  const configured = !!cfg.staffFormUrl;
+  const shops = Store.items.filter((i) => i.type === 'shop');
+
+  return `
+    <div class="view">
+      <div class="navnote">
+        <b>トラメガ隊の報告用ページです。</b><br>
+        店を選ぶとGoogleフォームが開きます。${
+          cfg.staffFormFields && cfg.staffFormFields.itemId
+            ? '模擬店IDは入力済みなので、<b>並んでいる人数を数えて入れるだけ</b>です。'
+            : '模擬店IDと待ち人数を入力してください。'
+        }<br>
+        送信すると、来場者の画面には最大${cfg.refreshIntervalSec}秒で反映されます。
+      </div>
+
+      ${
+        configured
+          ? ''
+          : `<div class="banner">
+              まだフォームが設定されていません。<code>js/config.js</code> の
+              <code>staffFormUrl</code> にGoogleフォームのURLを入れてください。
+              設定するまで、下のボタンを押しても何も起きません。
+            </div>`
+      }
+
+      ${shops
+        .map((i) => {
+          const l = liveOf(i.id);
+          const since = minutesSinceUpdate(i.id);
+          const stale = isStale(i.id);
+          const url = staffFormLink(i.id);
+          // 「報告が無い」と「報告はあるが時刻が分からない（デモ等）」は別物
+          let status;
+          if (l.reported === false) {
+            status = '<span style="color:var(--faint);font-size:11px">未報告</span>';
+          } else if (since === null) {
+            status = `<span style="color:var(--faint);font-size:11px">${
+              Store.source === 'demo' ? 'デモ値' : '時刻不明'
+            }</span>`;
+          } else {
+            status = `<span style="font-size:11px;color:${stale ? 'var(--peak)' : 'var(--muted)'}">${
+              since === 0 ? 'たった今' : `${since}分前`
+            }</span>`;
+          }
+          return `<a class="row" ${url ? `href="${esc(url)}" target="_blank" rel="noopener"` : ''} style="text-decoration:none">
+              <span class="row__emoji">${i.emoji || '📍'}</span>
+              <span class="row__main">
+                <span class="row__name">${esc(i.name)}</span>
+                <span class="row__sub">${esc(i.id)}・${esc(placeLabel(i))}</span>
+              </span>
+              <span class="row__right">
+                <div style="font-size:15px;font-weight:800">${l.wait}人</div>
+                ${status}
+              </span>
+            </a>`;
+        })
+        .join('')}
+
+      <div class="foot">
+        このページは来場者向けメニューには出していません。<br>
+        隊員には <code>${esc(location.origin + location.pathname)}#/staff</code> を共有してください。
+      </div>
+    </div>`;
+}
+
 /* ---------- ルーター ---------- */
 
 const TABS = [
@@ -690,6 +795,7 @@ function render() {
     quiz: 'おすすめ模擬店診断',
     schedule: 'マイスケジュール',
     map: 'キャンパスナビ',
+    staff: '隊員モード（報告用）',
   };
 
   const isRoot = TABS.some((t) => t.hash === '#/' + name);
@@ -709,6 +815,7 @@ function render() {
     quiz: viewQuiz,
     schedule: viewSchedule,
     map: () => viewMap(arg || null),
+    staff: viewStaff,
   };
   app.innerHTML = (views[name] || viewHome)();
 

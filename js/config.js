@@ -30,8 +30,19 @@ window.KODAIRA_CONFIG = {
     rating: '', // 例: 'entry.987654321'
   },
 
-  // トラメガ隊が開く入力フォーム（ヘッダーの「隊員用」リンク先）
-  staffFormUrl: '',
+  /* --- トラメガ隊の入力フォーム ----------------------------------------
+     staffFormUrl だけ入れれば「隊員用フォームを開く」リンクが出る。
+     さらに staffFormFields.itemId を入れると、アプリの隊員モード
+     （#/staff）から店を選ぶだけで模擬店IDが入力済みのフォームが開く。
+     entry.xxxxx はフォームの「事前入力したURLを取得」で調べられる。   */
+  staffFormUrl: '', // 例: https://docs.google.com/forms/d/e/xxxx/viewform
+  staffFormFields: {
+    itemId: '', // 例: 'entry.111111111'
+    wait: '', // 例: 'entry.222222222'（任意。入れると待ち人数欄も事前入力できる）
+  },
+
+  // 何分間更新がなければ「情報が古い可能性」と出すか
+  staleAfterMinutes: 30,
 
   /* --- 挙動 ---------------------------------------------------------- */
   refreshIntervalSec: 60, // 混雑データの自動再取得の間隔（秒）
